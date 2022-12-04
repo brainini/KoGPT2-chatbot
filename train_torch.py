@@ -12,6 +12,9 @@ from torch.utils.data import DataLoader, Dataset
 from transformers.optimization import AdamW, get_cosine_schedule_with_warmup
 from transformers import PreTrainedTokenizerFast, GPT2LMHeadModel
 
+import os
+os.environ["PL_TORCH_DISTRIBUTED_BACKEND"] = "gloo"
+
 parser = argparse.ArgumentParser(description='Simsimi based on KoGPT-2')
 
 parser.add_argument('--chat',
@@ -19,10 +22,10 @@ parser.add_argument('--chat',
                     default=False,
                     help='response generation on given user input')
 
-parser.add_argument('--sentiment',
+parser.add_argument('--age',
                     type=str,
                     default='0',
-                    help='sentiment for system. 0 is neutral, 1 is negative, 2 is positive.')
+                    help='남성 10대 label 0, 20대 label 1, 30대 label 2, 40대 label 3, 50대 label 4, 60대 이상 label 5, 여성 10대 label 6, 20대 label 7, 30대 label 8, 40대 label 9, 50대 label 10, 60대 이상 label 11')
 
 parser.add_argument('--model_params',
                     type=str,
@@ -42,7 +45,7 @@ S_TKN = '<sys>'
 BOS = '</s>'
 EOS = '</s>'
 MASK = '<unused0>'
-SENT = '<unused1>'
+AGE = '<unused1>'
 PAD = '<pad>'
 
 TOKENIZER = PreTrainedTokenizerFast.from_pretrained("skt/kogpt2-base-v2",
@@ -56,7 +59,7 @@ class CharDataset(Dataset):
         self.first = True
         self.q_token = U_TKN
         self.a_token = S_TKN
-        self.sent_token = SENT
+        self.age_token = AGE
         self.bos = BOS
         self.eos = EOS
         self.mask = MASK
@@ -71,11 +74,11 @@ class CharDataset(Dataset):
         turn = self._data.iloc[idx]
         q = turn['Q']
         a = turn['A']
-        sentiment = str(turn['label'])
-        q_toked = self.tokenizer.tokenize(self.q_token + q + \
-                                          self.sent_token + sentiment)   
+        agesex = str(turn['label'])
+        q_toked = self.tokenizer.tokenize(str(self.q_token) + str(q) + \
+                                          str(self.age_token) + str(agesex))   
         q_len = len(q_toked)
-        a_toked = self.tokenizer.tokenize(self.a_token + a + self.eos)
+        a_toked = self.tokenizer.tokenize(str(self.a_token) + str(a) + str(self.eos))
         a_len = len(a_toked)
         if q_len + a_len > self.max_len:
             a_len = self.max_len - q_len
@@ -184,16 +187,16 @@ class KoGPT2Chat(LightningModule):
         return torch.LongTensor(data), torch.LongTensor(mask), torch.LongTensor(label)
 
     def train_dataloader(self):
-        data = pd.read_csv('Chatbot_data/ChatbotData.csv')
+        data = pd.read_csv('Chatbot_data/train.csv')
         self.train_set = CharDataset(data, max_len=self.hparams.max_len)
         train_dataloader = DataLoader(
-            self.train_set, batch_size=self.hparams.batch_size, num_workers=2,
+            self.train_set, batch_size=self.hparams.batch_size, #num_workers=1,
             shuffle=True, collate_fn=self._collate_fn)
         return train_dataloader
 
-    def chat(self, sent='0'):
+    def chat(self, age='5'):
         tok = TOKENIZER
-        sent_tokens = tok.tokenize(sent)
+        age_tokens = tok.tokenize(age)
         with torch.no_grad():
             while 1:
                 q = input('user > ').strip()
@@ -201,7 +204,7 @@ class KoGPT2Chat(LightningModule):
                     break
                 a = ''
                 while 1:
-                    input_ids = torch.LongTensor(tok.encode(U_TKN + q + SENT + sent + S_TKN + a)).unsqueeze(dim=0)
+                    input_ids = torch.LongTensor(tok.encode(U_TKN + q + AGE + age + S_TKN + a)).unsqueeze(dim=0)
                     pred = self(input_ids)
                     gen = tok.convert_ids_to_tokens(
                         torch.argmax(
